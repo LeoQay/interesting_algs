@@ -183,7 +183,7 @@ namespace BagTask
                         degree--;
                     }
                 } else {
-                    if (degree <= 62) {
+                    if (degree <= 61) {
                         degree++;
                         rate *= 2;
                     }
