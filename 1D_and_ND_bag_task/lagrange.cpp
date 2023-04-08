@@ -8,7 +8,7 @@ namespace BagTask
 {
     using FLOAT = double;
 
-
+    template<typename T>
     class Bag1DSolver
     {
     public:
@@ -16,14 +16,14 @@ namespace BagTask
         {
             BagSubTask() : fixed(false), prev(-1), acc_weights(0), acc_price(0) {}
 
-            BagSubTask(int fixed_, int previous_, FLOAT accumulated_weights_, FLOAT accumulated_price_) :
-                fixed(fixed_), prev(previous_), acc_weights(accumulated_weights_),
-                acc_price(accumulated_price_) {}
+            BagSubTask(int fixed_, int previous_, T accumulated_weights_, T accumulated_price_) :
+            fixed(fixed_), prev(previous_), acc_weights(accumulated_weights_),
+            acc_price(accumulated_price_) {}
 
             bool fixed;
             int prev;
-            FLOAT acc_weights;
-            FLOAT acc_price;
+            T acc_weights;
+            T acc_price;
         };
 
         struct Result
@@ -31,23 +31,23 @@ namespace BagTask
             Result() : x(), maximum(0) {}
 
             std::vector<bool> x;
-            FLOAT maximum;
+            T maximum;
         };
 
-        static Result solve(const FLOAT * prices, const FLOAT * weights, int n, FLOAT C)
+        static Result solve(const T * prices, const T * weights, int n, T C)
         {
             std::vector<std::vector<BagSubTask>> lists(n + 1);
-            std::vector<int> not_negative(n);
+            std::vector<int> positive(n);
             lists[0].emplace_back(-1, -1, 0, 0);
 
             int lists_index = 0;
             for (int i = 0; i < n; i++)
             {
-                if (prices[i] < 0) continue;
+                if (prices[i] <= 0) continue;
 
                 auto & cur = lists[lists_index];
                 auto & next = lists[lists_index + 1];
-                not_negative[lists_index] = i;
+                positive[lists_index] = i;
                 lists_index++;
 
                 int tasks_number = (int) cur.size();
@@ -111,7 +111,7 @@ namespace BagTask
             for (int i = lists_index; i >= 1; i--)
             {
                 auto & elem = lists[i][current];
-                if (elem.fixed == 1) result.x[not_negative[i - 1]] = true;
+                if (elem.fixed == 1) result.x[positive[i - 1]] = true;
                 current = elem.prev;
             }
 
@@ -144,52 +144,33 @@ namespace BagTask
          * index determines which constraint is left for 1D bag
          */
         Result search(
-            const std::vector<FLOAT> & prices,
-            const std::vector<std::vector<FLOAT>> & weights,
-            const std::vector<FLOAT> & constraints,
-            int index,
-            int max_iterations)
+        const std::vector<FLOAT> & prices,
+        const std::vector<std::vector<FLOAT>> & weights,
+        const std::vector<FLOAT> & constraints,
+        int index,
+        int max_iterations)
         {
             init_search(prices, weights, constraints, index);
 
-            // compute values for lambda initialization
-            make_task();
-            solve_task();
-            eval_history_.push_back(constant_);
+            compute_lagrangian();
 
             int count_eval_bad_update = 0;
-
-            long long rate = 1;
-            int degree = 0;
 
             for (int iter = 1; iter <= max_iterations; iter++)
             {
                 compute_gradient();
+
                 FLOAT gradient_norm = compute_gradient_norm();
 
                 if (fabs(gradient_norm) < GRADIENT_EPS) break;
 
                 GD_step(iter, gradient_norm);
 
-                make_task();
-                solve_task();
-                eval_history_.push_back(constant_);
+                compute_lagrangian();
 
-                FLOAT step = eval_history_[iter] - eval_history_[iter - 1];
+                FLOAT step = eval_history_[1] - eval_history_[0];
 
-                if (step < EVAL_GOOD_STEP) {
-                    if (degree > 0) {
-                        rate /= 2;
-                        degree--;
-                    }
-                } else {
-                    if (degree <= 61) {
-                        degree++;
-                        rate *= 2;
-                    }
-                }
-
-                if (step >= 0) {
+                if (fabs(step) < FUNCTIONAL_EPS) {
                     count_eval_bad_update++;
                 } else {
                     count_eval_bad_update = 0;
@@ -218,12 +199,12 @@ namespace BagTask
             return result;
         }
 
-        void GD_step(long long rate, FLOAT gradient_norm)
+        void GD_step(long long iter, FLOAT gradient_norm)
         {
             for (int j = 0; j < m_; j++)
             {
                 if (j == index_) continue;
-                lambda_[j] -= gradient_[j] / gradient_norm / (FLOAT) rate;
+                lambda_[j] -= gradient_[j] / gradient_norm / (FLOAT) iter;
                 if (lambda_[j] < 0) lambda_[j] = 0;
             }
         }
@@ -257,9 +238,17 @@ namespace BagTask
             }
         }
 
+        void compute_lagrangian()
+        {
+            make_task();
+            solve_task();
+            eval_history_[0] = eval_history_[1];
+            eval_history_[1] = constant_;
+        }
+
         void solve_task()
         {
-            bag_1d_result_ = Bag1DSolver::solve(prices_.data(), weights_, n_, constraint_);
+            bag_1d_result_ = Bag1DSolver<FLOAT>::solve(prices_.data(), weights_, n_, constraint_);
             constant_ += bag_1d_result_.maximum;
         }
 
@@ -290,10 +279,10 @@ namespace BagTask
 
 
         void init_search(
-            const std::vector<FLOAT> & prices,
-            const std::vector<std::vector<FLOAT>> & weights,
-            const std::vector<FLOAT> & constraints,
-            int index)
+        const std::vector<FLOAT> & prices,
+        const std::vector<std::vector<FLOAT>> & weights,
+        const std::vector<FLOAT> & constraints,
+        int index)
         {
             n_ = (int) prices.size();
             m_ = (int) weights.size();
@@ -333,9 +322,9 @@ namespace BagTask
 
         ///////////////////////////////////////////////////////
         /// Constants
-        static constexpr FLOAT GRADIENT_EPS = 0.000001;
-        static constexpr int EVAL_MAX_BAD_COUNT = 1000;
-        static constexpr FLOAT EVAL_GOOD_STEP = 0.01;
+        static constexpr FLOAT GRADIENT_EPS = 0.00001;
+        static constexpr FLOAT FUNCTIONAL_EPS = 0.0001;
+        static constexpr int EVAL_MAX_BAD_COUNT = 100;
         ///////////////////////////////////////////////////////
 
 
@@ -343,7 +332,7 @@ namespace BagTask
         /// Parameters throwout optimization
         /// ( lambda_[index] and gradient_[index] not used )
         std::vector<FLOAT> lambda_;
-        Bag1DSolver::Result bag_1d_result_;
+        Bag1DSolver<FLOAT>::Result bag_1d_result_;
         std::vector<FLOAT> gradient_;
         std::vector<FLOAT> eval_history_;
         ////////////////////////////////////////////////////////
